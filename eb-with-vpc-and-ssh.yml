@@ -125,6 +125,13 @@ Resources:
       SubnetId: !Ref PublicSubnet3
       RouteTableId: !Ref PublicRouteTable
 
+  # ssh key pair
+  # EBKeyPair:
+  #   Type: AWS::EC2::KeyPair
+  #   Properties:
+  #     KeyName: !Sub ${AWS::StackName}-key
+  #     KeyFormat: pem
+
   # EB Security Group added in addition to the default EB SG to enable ssh
   EBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -176,9 +183,9 @@ Resources:
         - Namespace: aws:autoscaling:launchconfiguration
           OptionName: IamInstanceProfile
           Value: !Ref EBInstanceProfile
-        # - Namespace: aws:autoscaling:launchconfiguration
-        #   OptionName: EC2KeyName
-        #   Value: ...
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: EC2KeyName
+          Value: analytics-nopass
         - Namespace: aws:autoscaling:launchconfiguration
           OptionName: SecurityGroups
           Value: !Ref EBSecurityGroup
