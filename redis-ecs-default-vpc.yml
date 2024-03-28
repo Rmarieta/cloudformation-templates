@@ -1,0 +1,168 @@
+Parameters:
+  InstanceType:
+    Description: EC2 instance type for the Redis cluster.
+    Type: String
+    Default: t4g.nano
+    AllowedValues:
+      - t4g.nano
+      - t4g.micro
+      - t4g.small
+      - t4g.medium
+      - t4g.large
+      - t4g.xlarge
+      - t4g.2xlarge
+  # ECSClusterName:
+  #   Type: String
+  #   Description: >-
+  #     Specifies the ECS Cluster Name with which the resources would be
+  #     associated
+  #   Default: RedisCluster
+  # SecurityGroupIds:
+  #   Type: CommaDelimitedList
+  #   Description: >-
+  #     Optional - Specifies the Comma separated list of the Security Group Id of
+  #     an existing Security Group.
+  #   Default: ""
+  # VpcId:
+  #   Type: String
+  #   Description: >-
+  #     Optional - Specifies the ID of an existing VPC in which to launch your
+  #     container instances. If you specify a VPC ID, you must specify a list of
+  #     existing subnets in that VPC. If you do not specify a VPC ID, a new VPC is
+  #     created with at least 1 subnet.
+  #   Default: ""
+  #   AllowedPattern: "^(?:vpc-[0-9a-f]{8,17}|)$"
+  #   ConstraintDescription: VPC Id must begin with 'vpc-' and have a valid uuid
+  # SubnetIds:
+  #   Type: CommaDelimitedList
+  #   Description: >-
+  #     Optional - Specifies the Comma separated list of existing VPC Subnet Ids
+  #     where ECS instances will run
+  #   Default: ""
+  LatestECSOptimizedAMI:
+    Description: AMI ID
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2/arm64/recommended/image_id
+  # IamRoleInstanceProfile:
+  #   Type: String
+  #   Description: >-
+  #     Specifies the Name or the Amazon Resource Name (ARN) of the instance
+  #     profile associated with the IAM role for the instance
+  #   Default: "arn:aws:iam::097258850312:instance-profile/ecsInstanceRole"
+
+Resources:
+  ECSInstanceProfileRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+
+  ECSInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref ECSInstanceProfileRole
+
+  ECSLaunchTemplate:
+    Type: "AWS::EC2::LaunchTemplate"
+    DependsOn: ECSCluster
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref LatestECSOptimizedAMI
+        SecurityGroupIds:
+          - !GetAtt
+            - EC2SecurityGroup
+            - GroupId
+        InstanceType: !Ref InstanceType
+        KeyName: redis-test
+        IamInstanceProfile:
+          Arn: !Ref ECSInstanceProfile
+        UserData: !Base64
+          "Fn::Sub":
+            - |-
+              #!/bin/bash 
+              echo ECS_CLUSTER=${ClusterName} >> /etc/ecs/ecs.config;
+            - ClusterName: !Sub ${AWS::StackName}-cluster
+
+  ECSAutoScalingGroup:
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    DependsOn: ECSCluster
+    Properties:
+      MinSize: "1"
+      MaxSize: "1"
+      DesiredCapacity: "1"
+      LaunchTemplate:
+        LaunchTemplateId: !Ref ECSLaunchTemplate
+        Version: !GetAtt
+          - ECSLaunchTemplate
+          - LatestVersionNumber
+      # VPCZoneIdentifier: !Ref SubnetIds
+      Tags:
+        - Key: Name
+          PropagateAtLaunch: true
+          Value: !Join
+            - " - "
+            - - ECS Instance
+              - !Sub ${AWS::StackName}-cluster
+
+  ECSCluster:
+    Type: "AWS::ECS::Cluster"
+    Properties:
+      ClusterName: !Sub ${AWS::StackName}-cluster
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+      Configuration:
+        ExecuteCommandConfiguration:
+          Logging: DEFAULT
+      ServiceConnectDefaults:
+        Namespace: RedisCluster
+      Tags: []
+
+  EC2CapacityProvider:
+    Type: "AWS::ECS::CapacityProvider"
+    Properties:
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref ECSAutoScalingGroup
+        ManagedScaling:
+          Status: ENABLED
+          TargetCapacity: 100
+        ManagedTerminationProtection: DISABLED
+
+  ClusterCPAssociation:
+    Type: "AWS::ECS::ClusterCapacityProviderAssociations"
+    DependsOn: ECSCluster
+    Properties:
+      Cluster: !Sub ${AWS::StackName}-cluster
+      CapacityProviders:
+        - !Ref EC2CapacityProvider
+      DefaultCapacityProviderStrategy:
+        - Base: 0
+          Weight: 1
+          CapacityProvider: !Ref EC2CapacityProvider
+
+  EC2SecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: SG for redis cluster
+      GroupName: redis-cluster
+      # VpcId: vpc-0e64c807c9d9c49f4
+      SecurityGroupIngress:
+        - FromPort: 22
+          ToPort: 22
+          IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+        - FromPort: 22
+          ToPort: 22
+          IpProtocol: tcp
+          CidrIpv6: "::/0"
+
+Outputs:
+  ECSCluster:
+    Description: The created cluster.
+    Value: !Ref ECSCluster

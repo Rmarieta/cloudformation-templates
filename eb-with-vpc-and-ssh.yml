@@ -30,14 +30,16 @@ Parameters:
     Description: Minimum number of EC2 instances for the Flask API
     Type: Number
     Default: 1
-    MinValue: 1 # MinSize should be higher than 0
+    # MinSize should be higher than 0
+    MinValue: 1
     ConstraintDescription: MinSize must be at least 1
 
   MaxSize:
     Description: Maximum number of EC2 instances for the Flask API
     Type: Number
     Default: 2
-    MinValue: !Ref MinSize # MaxSize should be higher or equal to MinSize
+    # MaxSize should be higher or equal to MinSize
+    MinValue: 1
     ConstraintDescription: MaxSize must be greater than or equal to MinSize
 
 Resources:
@@ -137,17 +139,31 @@ Resources:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: Security Group for all ElasticBeanstalk Environments
+      GroupName: !Sub ${AWS::StackName}-AWSEBCustomSecurityGroup
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 22
           ToPort: 22
           CidrIp: 0.0.0.0/0
       VpcId: !Ref PublicVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-env
 
   EBApplication:
     Type: AWS::ElasticBeanstalk::Application
     Properties:
       ApplicationName: !Sub ${AWS::StackName}-app
+
+  # pull app code from ECR Docker image
+  EBApplicationVersion:
+    Type: AWS::ElasticBeanstalk::ApplicationVersion
+    Properties:
+      ApplicationName: !Ref EBApplication
+      Description: Pulling Docker image from ECR
+      SourceBundle:
+        S3Bucket: eb-cloudformation-docker-compose
+        S3Key: basic-flask-test/docker-compose.yml
 
   EBInstanceProfileRole:
     Type: AWS::IAM::Role
@@ -171,7 +187,7 @@ Resources:
   EBConfigurationTemplate:
     Type: AWS::ElasticBeanstalk::ConfigurationTemplate
     Properties:
-      ApplicationName: !Ref ElasticBeanstalkApplication
+      ApplicationName: !Ref EBApplication
       OptionSettings:
         - Namespace: aws:autoscaling:asg
           OptionName: MinSize
@@ -265,16 +281,7 @@ Resources:
       ApplicationName: !Ref EBApplication
       EnvironmentName: !Sub ${AWS::StackName}-env
       TemplateName: !Ref EBConfigurationTemplate
-
-  # pull app code from ECR Docker image
-  EBApplicationVersion:
-    Type: AWS::ElasticBeanstalk::ApplicationVersion
-    Properties:
-      ApplicationName: !Ref EBApplication
-      Description: Pulling Docker image from ECR
-      SourceBundle:
-        S3Bucket: eb-cloudformation-docker-compose
-        S3Key: basic-flask-test/docker-compose.yml
+      VersionLabel: !Ref EBApplicationVersion
 
 Outputs:
   PublicVPCID:

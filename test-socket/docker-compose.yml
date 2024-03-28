@@ -1,0 +1,5 @@
+services:
+  flask:
+    image: public.ecr.aws/f7y3w4q3/unianalytics-docker:latest
+    ports:
+      - "80:5000"

@@ -142,6 +142,16 @@ Resources:
     Properties:
       ApplicationName: !Sub ${AWS::StackName}-app
 
+  # pull app code from ECR Docker image
+  EBApplicationVersion:
+    Type: AWS::ElasticBeanstalk::ApplicationVersion
+    Properties:
+      ApplicationName: !Ref EBApplication
+      Description: Pulling Docker image from ECR
+      SourceBundle:
+        S3Bucket: eb-cloudformation-docker-compose
+        S3Key: basic-flask-test/docker-compose.yml
+
   EBInstanceProfileRole:
     Type: AWS::IAM::Role
     Properties:
@@ -164,7 +174,7 @@ Resources:
   EBConfigurationTemplate:
     Type: AWS::ElasticBeanstalk::ConfigurationTemplate
     Properties:
-      ApplicationName: !Ref ElasticBeanstalkApplication
+      ApplicationName: !Ref EBApplication
       OptionSettings:
         - Namespace: aws:autoscaling:asg
           OptionName: MinSize
@@ -258,16 +268,7 @@ Resources:
       ApplicationName: !Ref EBApplication
       EnvironmentName: !Sub ${AWS::StackName}-env
       TemplateName: !Ref EBConfigurationTemplate
-
-  # pull app code from ECR Docker image
-  EBApplicationVersion:
-    Type: AWS::ElasticBeanstalk::ApplicationVersion
-    Properties:
-      ApplicationName: !Ref EBApplication
-      Description: Pulling Docker image from ECR
-      SourceBundle:
-        S3Bucket: eb-cloudformation-docker-compose
-        S3Key: basic-flask-test/docker-compose.yml
+      VersionLabel: !Ref EBApplicationVersion
 
 Outputs:
   PublicVPCID:

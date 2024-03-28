@@ -1,0 +1,175 @@
+Parameters:
+  InstanceType:
+    Description: EC2 instance type for the Elastic Beanstalk environment. Check for the Free Tier options available in your region (t2.micro or t3.micro).
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t2.nano
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+      - t2.xlarge
+      - t2.2xlarge
+      - t3.nano
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - t3.2xlarge
+      # - t4g.nano
+      # - t4g.micro
+      # - t4g.small
+      # - t4g.medium
+      # - t4g.large
+      # - t4g.xlarge
+      # - t4g.2xlarge
+
+  MinSize:
+    Description: Minimum number of EC2 instances for the Flask API
+    Type: Number
+    Default: 1
+    # MinSize should be higher than 0
+    MinValue: 1
+    ConstraintDescription: MinSize must be at least 1
+
+  MaxSize:
+    Description: Maximum number of EC2 instances for the Flask API
+    Type: Number
+    Default: 2
+    # MaxSize should be higher or equal to MinSize
+    MinValue: 1
+    ConstraintDescription: MaxSize must be greater than or equal to MinSize
+
+Resources:
+  # EB Security Group added in addition to the default EB SG to enable ssh
+  EBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for all ElasticBeanstalk Environments
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  EBApplication:
+    Type: AWS::ElasticBeanstalk::Application
+    Properties:
+      ApplicationName: !Sub ${AWS::StackName}-app
+
+  EBInstanceProfileRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier
+
+  EBInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EBInstanceProfileRole
+
+  EBConfigurationTemplate:
+    Type: AWS::ElasticBeanstalk::ConfigurationTemplate
+    Properties:
+      ApplicationName: !Ref EBApplication
+      OptionSettings:
+        - Namespace: aws:autoscaling:asg
+          OptionName: MinSize
+          Value: !Ref MinSize
+        - Namespace: aws:autoscaling:asg
+          OptionName: MaxSize
+          Value: !Ref MaxSize
+
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: IamInstanceProfile
+          Value: !Ref EBInstanceProfile
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: EC2KeyName
+          Value: analytics-nopass
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: SecurityGroups
+          Value: !Ref EBSecurityGroup
+
+        # - Namespace: aws:autoscaling:scheduledaction
+        #   OptionName: ...
+        #   Value: ...
+        # - Namespace: aws:autoscaling:trigger
+        #   OptionName: ...
+        #   Value: ...
+        # - Namespace: aws:autoscaling:updatepolicy:rollingupdate
+        #   OptionName: ...
+        #   Value: ...
+
+        - Namespace: aws:ec2:instances
+          OptionName: InstanceTypes
+          Value: !Join [",", [!Ref InstanceType]]
+
+        - Namespace: aws:ec2:vpc
+          OptionName: ELBScheme
+          Value: public
+        - Namespace: aws:ec2:vpc
+          OptionName: AssociatePublicIpAddress
+          Value: true
+
+        - Namespace: aws:elasticbeanstalk:application
+          OptionName: Application Healthcheck URL
+          Value: /
+
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: EnvironmentType
+          Value: LoadBalanced
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: LoadBalancerType
+          Value: application
+
+        # DB initialization
+        # - Namespace: aws:rds:dbinstance
+        #   OptionName: DBAllocatedStorage
+        #   Value: 25
+        # - Namespace: aws:rds:dbinstance
+        #   OptionName: DBEngine
+        #   Value: postgres
+        # - Namespace: aws:rds:dbinstance
+        #   OptionName: DBInstanceClass
+        #   Value: !Ref DBInstanceType
+        # - Namespace: aws:rds:dbinstance
+        #   OptionName: DBUser
+        #   Value: ebuser
+        # - Namespace: aws:rds:dbinstance
+        #   OptionName: DBPassword
+        #   Value: ...
+
+      # using the Docker platform
+      SolutionStackName: 64bit Amazon Linux 2023 v4.3.0 running Docker
+
+  EBEnvironment:
+    Type: AWS::ElasticBeanstalk::Environment
+    Properties:
+      ApplicationName: !Ref EBApplication
+      EnvironmentName: !Sub ${AWS::StackName}-env
+      TemplateName: !Ref EBConfigurationTemplate
+
+  # pull app code from ECR Docker image
+  EBApplicationVersion:
+    Type: AWS::ElasticBeanstalk::ApplicationVersion
+    Properties:
+      ApplicationName: !Ref EBApplication
+      Description: Pulling Docker image from ECR
+      SourceBundle:
+        S3Bucket: eb-cloudformation-docker-compose
+        S3Key: basic-flask-test/docker-compose.yml
+
+Outputs:
+  LoadBalancerURL:
+    Description: URL to reach the load balancer and the API
+    Value: !Join ["", ["http://", !GetAtt EBEnvironment.EndpointURL]]
