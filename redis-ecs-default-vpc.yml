@@ -23,32 +23,25 @@ Parameters:
   #     Optional - Specifies the Comma separated list of the Security Group Id of
   #     an existing Security Group.
   #   Default: ""
-  # VpcId:
-  #   Type: String
-  #   Description: >-
-  #     Optional - Specifies the ID of an existing VPC in which to launch your
-  #     container instances. If you specify a VPC ID, you must specify a list of
-  #     existing subnets in that VPC. If you do not specify a VPC ID, a new VPC is
-  #     created with at least 1 subnet.
-  #   Default: ""
-  #   AllowedPattern: "^(?:vpc-[0-9a-f]{8,17}|)$"
-  #   ConstraintDescription: VPC Id must begin with 'vpc-' and have a valid uuid
-  # SubnetIds:
-  #   Type: CommaDelimitedList
-  #   Description: >-
-  #     Optional - Specifies the Comma separated list of existing VPC Subnet Ids
-  #     where ECS instances will run
-  #   Default: ""
+  VPCId:
+    Description: Select the VPC for your resources
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Description: Select the Subnets
+    Type: List<AWS::EC2::Subnet::Id>
   LatestECSOptimizedAMI:
     Description: AMI ID
     Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
-    Default: /aws/service/ecs/optimized-ami/amazon-linux-2/arm64/recommended/image_id
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id
   # IamRoleInstanceProfile:
   #   Type: String
   #   Description: >-
   #     Specifies the Name or the Amazon Resource Name (ARN) of the instance
   #     profile associated with the IAM role for the instance
   #   Default: "arn:aws:iam::097258850312:instance-profile/ecsInstanceRole"
+  SSHKey:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of the key pair to ssh into the EC2 instance
 
 Resources:
   ECSInstanceProfileRole:
@@ -79,9 +72,9 @@ Resources:
             - EC2SecurityGroup
             - GroupId
         InstanceType: !Ref InstanceType
-        KeyName: redis-test
+        KeyName: !Ref SSHKey
         IamInstanceProfile:
-          Arn: !Ref ECSInstanceProfile
+          Arn: !GetAtt ECSInstanceProfile.Arn
         UserData: !Base64
           "Fn::Sub":
             - |-
@@ -101,7 +94,7 @@ Resources:
         Version: !GetAtt
           - ECSLaunchTemplate
           - LatestVersionNumber
-      # VPCZoneIdentifier: !Ref SubnetIds
+      VPCZoneIdentifier: !Ref SubnetIds
       Tags:
         - Key: Name
           PropagateAtLaunch: true
@@ -149,9 +142,9 @@ Resources:
   EC2SecurityGroup:
     Type: "AWS::EC2::SecurityGroup"
     Properties:
-      GroupDescription: SG for redis cluster
-      GroupName: redis-cluster
-      # VpcId: vpc-0e64c807c9d9c49f4
+      GroupDescription: SG for ECS cluster
+      GroupName: !Sub ${AWS::StackName}-SecurityGroup
+      VpcId: !Ref VPCId
       SecurityGroupIngress:
         - FromPort: 22
           ToPort: 22
@@ -161,6 +154,9 @@ Resources:
           ToPort: 22
           IpProtocol: tcp
           CidrIpv6: "::/0"
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName"]]
 
 Outputs:
   ECSCluster:
