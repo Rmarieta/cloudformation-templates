@@ -24,26 +24,28 @@ Parameters:
   SSHKey:
     Type: AWS::EC2::KeyPair::KeyName
     Description: Name of the key pair to ssh into the EC2 instance
+  IamRoleInstanceProfile:
+    Type: String
+    Description: Specifies the Name or the Amazon Resource Name (ARN) of the instance profile associated with the IAM role for the instance
+    Default: arn:aws:iam::097258850312:instance-profile/ecsInstanceRole
 
 Resources:
-  ECSInstanceProfileRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+  # ECSInstanceProfileRole:
+  #   Type: AWS::IAM::Role
+  #   Properties:
+  #     AssumeRolePolicyDocument:
+  #       Version: 2012-10-17
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal:
+  #             Service: ec2.amazonaws.com
+  #           Action: sts:AssumeRole
 
-  ECSInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      Roles:
-        - !Ref ECSInstanceProfileRole
+  # ECSInstanceProfile:
+  #   Type: AWS::IAM::InstanceProfile
+  #   Properties:
+  #     Roles:
+  #       - !Ref ECSInstanceProfileRole
 
   ECSLaunchTemplate:
     Type: "AWS::EC2::LaunchTemplate"
@@ -58,7 +60,7 @@ Resources:
         InstanceType: !Ref InstanceType
         KeyName: !Ref SSHKey
         IamInstanceProfile:
-          Arn: !GetAtt ECSInstanceProfile.Arn
+          Arn: !Ref IamRoleInstanceProfile
         UserData: !Base64
           "Fn::Sub":
             - |-
@@ -142,34 +144,32 @@ Resources:
         - Key: Name
           Value: !Join [_, [!Ref "AWS::StackName"]]
 
-  ECSService:
-    Type: AWS::ECS::Service
-    # wait for the EC2 instances to be provisioned to avoid health failures at the start
-    DependsOn: ECSAutoScalingGroup
-    Properties:
-      Cluster: !Ref ECSCluster
-      DeploymentConfiguration:
-        MaximumPercent: 100
-        MinimumHealthyPercent: 0
-        DeploymentCircuitBreaker:
-          Enable: true
-          Rollback: true
-      DeploymentController:
-        Type: ECS
-      DesiredCount: 1
-      EnableECSManagedTags: true
-      PlacementConstraints: []
-      PlacementStrategies:
-        - Field: attribute:ecs.availability-zone
-          Type: spread
-        - Field: instanceId
-          Type: spread
-      SchedulingStrategy: REPLICA
-      ServiceName: !Sub ${AWS::StackName}-service
-      ServiceConnectConfiguration:
-        Enabled: false
-      Tags: []
-      TaskDefinition: arn:aws:ecs:eu-north-1:097258850312:task-definition/redis-ec2-t4gnano:3
+  # ECSService:
+  #   Type: AWS::ECS::Service
+  #   Properties:
+  #     Cluster: !Ref ECSCluster
+  #     DeploymentConfiguration:
+  #       MaximumPercent: 100
+  #       MinimumHealthyPercent: 0
+  #       DeploymentCircuitBreaker:
+  #         Enable: true
+  #         Rollback: true
+  #     DeploymentController:
+  #       Type: ECS
+  #     DesiredCount: 1
+  #     EnableECSManagedTags: true
+  #     PlacementConstraints: []
+  #     PlacementStrategies:
+  #       - Field: attribute:ecs.availability-zone
+  #         Type: spread
+  #       - Field: instanceId
+  #         Type: spread
+  #     SchedulingStrategy: REPLICA
+  #     ServiceName: !Sub ${AWS::StackName}-service
+  #     ServiceConnectConfiguration:
+  #       Enabled: false
+  #     Tags: []
+  #     TaskDefinition: arn:aws:ecs:eu-north-1:097258850312:task-definition/redis-ec2-t4gnano:3
 
 Outputs:
   ECSCluster:
