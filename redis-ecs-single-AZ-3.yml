@@ -1,0 +1,266 @@
+Parameters:
+  InstanceType:
+    Description: EC2 instance type for the Redis cluster.
+    Type: String
+    Default: t4g.nano
+    AllowedValues:
+      - t4g.nano
+      - t4g.micro
+      - t4g.small
+      - t4g.medium
+      - t4g.large
+      - t4g.xlarge
+      - t4g.2xlarge
+  VPCId:
+    Description: Select the VPC for your resources
+    Type: AWS::EC2::VPC::Id
+  SubnetIds:
+    Description: Select the Subnet
+    Type: List<AWS::EC2::Subnet::Id>
+  LatestECSOptimizedAMI:
+    Description: AMI ID
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
+    Default: /aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id
+  SSHKey:
+    Description: Name of the key pair to ssh into the EC2 instance
+    Type: AWS::EC2::KeyPair::KeyName
+  EBSecurityGroup:
+    Description: Select the Custom Security Group that wraps the Elastic Beanstalk EC2 instances
+    Type: AWS::EC2::SecurityGroup::Id
+
+Resources:
+  ECSInstanceProfileRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+
+  ECSInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref ECSInstanceProfileRole
+
+  ECSRedisENI:
+    Type: AWS::EC2::NetworkInterface
+    Properties:
+      SubnetId: !Select [0, !Ref SubnetIds] # select the first subnet from tshe list
+      Description: ENI for ECS Redis Instance
+      GroupSet:
+        - !GetAtt ECSSecurityGroup.GroupId
+
+  ECSLaunchTemplate:
+    Type: "AWS::EC2::LaunchTemplate"
+    DependsOn: ECSCluster
+    Properties:
+      LaunchTemplateData:
+        ImageId: !Ref LatestECSOptimizedAMI
+        # SecurityGroupIds:
+        #   - !GetAtt ECSSecurityGroup.GroupId
+        InstanceType: !Ref InstanceType
+        KeyName: !Ref SSHKey
+        IamInstanceProfile:
+          Arn: !GetAtt ECSInstanceProfile.Arn
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            NetworkInterfaceId: !Ref ECSRedisENI
+            # Groups:
+            #   - !GetAtt ECSSecurityGroup.GroupId
+        UserData: !Base64
+          "Fn::Sub":
+            - |-
+              #!/bin/bash 
+              echo ECS_CLUSTER=${ClusterName} >> /etc/ecs/ecs.config;
+            - ClusterName: !Sub ${AWS::StackName}-ECSCluster
+
+  ECSAutoScalingGroup:
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    DependsOn:
+      - ECSCluster
+      # - GatewayToInternet
+    Properties:
+      MinSize: "1"
+      MaxSize: "1"
+      DesiredCapacity: "1"
+      LaunchTemplate:
+        # only the last launched instance will have the ENI attached, in this case the single instance of the ASG
+        LaunchTemplateId: !Ref ECSLaunchTemplate
+        Version: !GetAtt ECSLaunchTemplate.LatestVersionNumber
+      VPCZoneIdentifier:
+        - !Select [0, !Ref SubnetIds] # select the first subnet from the list
+      Tags:
+        - Key: Name
+          PropagateAtLaunch: true
+          Value: !Join
+            - " - "
+            - - ECS Instance
+              - !Sub ${AWS::StackName}-ECSCluster
+
+  ECSCluster:
+    Type: "AWS::ECS::Cluster"
+    Properties:
+      ClusterName: !Sub ${AWS::StackName}-ECSCluster
+      ClusterSettings:
+        - Name: containerInsights
+          Value: disabled
+      Configuration:
+        ExecuteCommandConfiguration:
+          Logging: DEFAULT
+      ServiceConnectDefaults:
+        Namespace: !Sub ${AWS::StackName}-ECSCluster
+      Tags: []
+
+  ECSCapacityProvider:
+    Type: "AWS::ECS::CapacityProvider"
+    Properties:
+      AutoScalingGroupProvider:
+        AutoScalingGroupArn: !Ref ECSAutoScalingGroup
+        ManagedScaling:
+          Status: ENABLED
+          TargetCapacity: 100
+        ManagedTerminationProtection: DISABLED
+
+  ECSClusterCPAssociation:
+    Type: "AWS::ECS::ClusterCapacityProviderAssociations"
+    DependsOn: ECSCluster
+    Properties:
+      Cluster: !Sub ${AWS::StackName}-ECSCluster
+      CapacityProviders:
+        - !Ref ECSCapacityProvider
+      DefaultCapacityProviderStrategy:
+        - Base: 0
+          Weight: 1
+          CapacityProvider: !Ref ECSCapacityProvider
+
+  ECSSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: SG for ECS cluster
+      GroupName: !Sub ${AWS::StackName}-ECSSecurityGroup
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        - FromPort: 22
+          ToPort: 22
+          IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+        - FromPort: 22
+          ToPort: 22
+          IpProtocol: tcp
+          CidrIpv6: "::/0"
+        - FromPort: 6379
+          ToPort: 6379
+          IpProtocol: tcp
+          SourceSecurityGroupId: !Ref EBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName"]]
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  ECSCloudWatchLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub ${AWS::StackName}-ECSRedisTaskGroup
+
+  ECSTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub ${AWS::StackName}-ECSRedisTask
+      ContainerDefinitions:
+        - Name: redis
+          Image: redis:7.2.3
+          Cpu: 0
+          MemoryReservation: 410
+          PortMappings:
+            - Name: redis-80-tcp
+              ContainerPort: 80
+              HostPort: 0
+              Protocol: tcp
+              AppProtocol: http
+            - Name: redis-6379-tcp
+              ContainerPort: 6379
+              HostPort: 6379
+              Protocol: tcp
+          Essential: true
+          Environment: []
+          EnvironmentFiles: []
+          MountPoints: []
+          VolumesFrom: []
+          Ulimits: []
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-create-group: true
+              awslogs-group: !Ref ECSCloudWatchLogsGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+            SecretOptions: []
+          HealthCheck:
+            Command:
+              - "CMD-SHELL"
+              - "redis-cli --raw incr ping"
+            Interval: 5
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 15
+      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
+      RequiresCompatibilities:
+        - EC2
+      RuntimePlatform:
+        CpuArchitecture: ARM64
+        OperatingSystemFamily: LINUX
+
+  ECSService:
+    Type: AWS::ECS::Service
+    # wait for the EC2 instances to be provisioned to avoid health failures at the start
+    DependsOn: ECSAutoScalingGroup
+    Properties:
+      Cluster: !Ref ECSCluster
+      DeploymentConfiguration:
+        MaximumPercent: 100
+        MinimumHealthyPercent: 0
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      DeploymentController:
+        Type: ECS
+      DesiredCount: 1
+      EnableECSManagedTags: true
+      PlacementConstraints: []
+      PlacementStrategies:
+        - Field: attribute:ecs.availability-zone
+          Type: spread
+        - Field: instanceId
+          Type: spread
+      SchedulingStrategy: REPLICA
+      ServiceName: !Sub ${AWS::StackName}-ECSService
+      ServiceConnectConfiguration:
+        Enabled: false
+      Tags: []
+      TaskDefinition: !Ref ECSTaskDefinition
+
+Outputs:
+  ECSCluster:
+    Description: The created cluster.
+    Value: !Ref ECSCluster
+  ECSRedisENIPrivateIpAddress:
+    Description: Private IPv4 address of the Redis ENI
+    Value: !GetAtt ECSRedisENI.PrimaryPrivateIpAddress
