@@ -157,17 +157,17 @@ Resources:
         - VPCId: !Ref VPCId
           VPCRegion: !Ref AWS::Region
 
-  # RedisInstanceDnsRecord:
-  #   Type: AWS::Route53::RecordSet
-  #   Properties:
-  #     HostedZoneId: !Ref RedisPrivateHostedZone
-  #     Name: !Sub "api.${AWS::StackName}-redis-dns"
-  #     Type: A
-  #     TTL: "20"
-  #     ResourceRecords:
-  #       - 172.31.255.0 # provide an IP that's part of the VPC but unused (not part of any subnets)
+  RedisInstanceDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref RedisPrivateHostedZone
+      Name: !Sub "api.${AWS::StackName}-redis-dns"
+      Type: A
+      TTL: "20"
+      ResourceRecords:
+        - 172.31.255.0 # provide an IP that's part of the VPC but unused (not part of any subnets)
 
-  LambdaExecutionRole:
+  DNSRecordLambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
@@ -185,32 +185,35 @@ Resources:
               - Effect: Allow
                 Action:
                   - route53:ChangeResourceRecordSets
+                  - route53:GetHostedZone
                 Resource: !Sub "arn:aws:route53:::hostedzone/${RedisPrivateHostedZone}"
 
-  LambdaFunction:
+  DNSRecordLambdaUpdate:
     Type: AWS::Lambda::Function
     Properties:
-      Handler: index.handler
-      Role: !GetAtt LambdaExecutionRole.Arn
+      Handler: index.lambda_handler
+      Role: !GetAtt DNSRecordLambdaExecutionRole.Arn
       Environment:
         Variables:
-          HOSTED_ZONE: !Ref RedisPrivateHostedZone
+          HOSTED_ZONE_ID: !Ref RedisPrivateHostedZone
       Code:
         ZipFile: |
           import boto3
           import os
+          import json
 
           def lambda_handler(event, context):
               client = boto3.client('route53')
+              hosted_zone_name = client.get_hosted_zone(Id=os.environ.get('HOSTED_ZONE_ID')).get('HostedZone').get('Name')
 
               response = client.change_resource_record_sets(
-                  HostedZoneId=os.environ['HOSTED_ZONE'],
+                  HostedZoneId=os.environ.get('HOSTED_ZONE_ID'),
                   ChangeBatch={
                       'Changes': [
                           {
                               'Action': 'UPSERT',
                               'ResourceRecordSet': {
-                                  'Name': f'api.{os.environ['HOSTED_ZONE']}',
+                                  'Name': f"api.{hosted_zone_name}",
                                   'Type': 'A',
                                   'TTL': 20,
                                   'ResourceRecords': [
@@ -223,9 +226,83 @@ Resources:
                       ]
                   }
               )
+              
+              response['ChangeInfo']['SubmittedAt'] = response['ChangeInfo']['SubmittedAt'].isoformat()
 
-              return response
+              return json.dumps(response)
+
       Runtime: python3.11
+
+  # DNSRecordLambdaDelete: # delete the record created with Lambda in the private hosted zone upon stack DELETE
+  #   Type: AWS::Lambda::Function
+  #   Properties:
+  #     Handler: index.lambda_handler
+  #     Role: !GetAtt DNSRecordLambdaExecutionRole.Arn
+  #     Environment:
+  #       Variables:
+  #         HOSTED_ZONE_ID: !Ref RedisPrivateHostedZone
+  #     Code:
+  #       ZipFile: |
+  #         import boto3
+  #         import os
+  #         import json
+
+  #         def lambda_handler(event, context):
+
+  #             response = { 'ChangeInfo': { 'Comment': 'Not a DELETE stack event' } }
+  #             if event['RequestType'] == 'Delete':
+
+  #                 client = boto3.client('route53')
+  #                 hosted_zone_name = client.get_hosted_zone(Id=os.environ.get('HOSTED_ZONE_ID')).get('HostedZone').get('Name')
+  #                 record_name = f"api.{hosted_zone_name}"
+
+  #                 # retrieve the current record value necessary for deletion
+  #                 response_record_sets = client.list_resource_record_sets(
+  #                     HostedZoneId=os.environ.get('HOSTED_ZONE_ID'),
+  #                     StartRecordName=record_name,
+  #                     StartRecordType='A',
+  #                     MaxItems='1'
+  #                 )
+
+  #                 current_value = None
+  #                 if 'ResourceRecordSets' in response_record_sets:
+  #                     record_set = response_record_sets['ResourceRecordSets'][0]
+  #                     if record_set['Name'] == record_name and record_set['Type'] == 'A':
+  #                         current_value = record_set['ResourceRecords'][0]['Value']
+
+  #                 # if a value has been found for the record
+  #                 if current_value:
+  #                   response = client.change_resource_record_sets(
+  #                       HostedZoneId=os.environ.get('HOSTED_ZONE_ID'),
+  #                       ChangeBatch={
+  #                           'Changes': [
+  #                               {
+  #                                   'Action': 'DELETE',
+  #                                   'ResourceRecordSet': {
+  #                                       'Name': record_name,
+  #                                       'Type': 'A',
+  #                                       'TTL': 20,
+  #                                       'ResourceRecords': [
+  #                                           {
+  #                                               'Value': current_value
+  #                                           }
+  #                                       ]
+  #                                   }
+  #                               }
+  #                           ]
+  #                       }
+  #                   )
+
+  #                   response['ChangeInfo']['SubmittedAt'] = response['ChangeInfo']['SubmittedAt'].isoformat()
+
+  #             return json.dumps(response)
+
+  #     Runtime: python3.11
+
+  # OnStackDeletionCleanUp: # call the Lambda to delete the record in the private hosted zone to avoid failure of stack deletion
+  #   Type: Custom::CleanUpPrivateZoneRecordLambda
+  #   Properties:
+  #     ServiceToken: !GetAtt DNSRecordLambdaDelete.Arn
 
   # ECSTaskExecutionRole:
   #   Type: AWS::IAM::Role
@@ -323,9 +400,12 @@ Resources:
   #     TaskDefinition: !Ref ECSTaskDefinition
 
 Outputs:
-  ECSCluster:
-    Description: The created cluster.
-    Value: !Ref ECSCluster
   RedisInstanceDnsRecord:
-    Description: DNS name for Redis instance
+    Description: Returned value for the created redis dns record.
     Value: !Ref RedisInstanceDnsRecord
+  # ECSCluster:
+  #   Description: The created cluster.
+  #   Value: !Ref ECSCluster
+  # RedisInstanceDnsRecord:
+  #   Description: DNS name for Redis instance
+  #   Value: !Ref RedisInstanceDnsRecord
