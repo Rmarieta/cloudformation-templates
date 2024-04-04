@@ -14,9 +14,9 @@ Parameters:
   VPCId:
     Description: Select the VPC for your resources
     Type: AWS::EC2::VPC::Id
-  SubnetIds:
-    Description: Select the Subnet
-    Type: List<AWS::EC2::Subnet::Id>
+  # SubnetIds:
+  #   Description: Select the Subnet
+  #   Type: List<AWS::EC2::Subnet::Id>
   LatestECSOptimizedAMI:
     Description: AMI ID
     Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
@@ -185,7 +185,6 @@ Resources:
               - Effect: Allow
                 Action:
                   - route53:ChangeResourceRecordSets
-                  - route53:GetHostedZone
                 Resource: !Sub "arn:aws:route53:::hostedzone/${RedisPrivateHostedZone}"
 
   DNSRecordLambdaUpdate:
@@ -194,8 +193,10 @@ Resources:
       Handler: index.lambda_handler
       Role: !GetAtt DNSRecordLambdaExecutionRole.Arn
       Environment:
+        # to access in the Lambda execution code as environment variables
         Variables:
           HOSTED_ZONE_ID: !Ref RedisPrivateHostedZone
+          HOSTED_ZONE_RECORD_NAME: !Ref RedisInstanceDnsRecord
       Code:
         ZipFile: |
           import boto3
@@ -204,7 +205,6 @@ Resources:
 
           def lambda_handler(event, context):
               client = boto3.client('route53')
-              hosted_zone_name = client.get_hosted_zone(Id=os.environ.get('HOSTED_ZONE_ID')).get('HostedZone').get('Name')
 
               response = client.change_resource_record_sets(
                   HostedZoneId=os.environ.get('HOSTED_ZONE_ID'),
@@ -213,7 +213,7 @@ Resources:
                           {
                               'Action': 'UPSERT',
                               'ResourceRecordSet': {
-                                  'Name': f"api.{hosted_zone_name}",
+                                  'Name': os.environ.get('HOSTED_ZONE_RECORD_NAME'),
                                   'Type': 'A',
                                   'TTL': 20,
                                   'ResourceRecords': [
