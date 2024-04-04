@@ -217,7 +217,7 @@ Resources:
                 Resource: !GetAtt SharedDNSRecordLambdaUpdate.Arn
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
-        - arn:aws:iam::aws:policy/service-role/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
 
   ECSInstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -237,6 +237,8 @@ Resources:
         # KeyName: !Ref SSHKey
         IamInstanceProfile:
           Arn: !GetAtt ECSInstanceProfile.Arn
+        NetworkInterfaces:
+          - AssociatePublicIpAddress: false
         UserData: !Base64
           "Fn::Sub":
             - |-
