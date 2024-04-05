@@ -11,22 +11,58 @@ Parameters:
       - t4g.large
       - t4g.xlarge
       - t4g.2xlarge
-  VPCId:
-    Description: Select the VPC for your resources
-    Type: AWS::EC2::VPC::Id
-  SubnetIds:
-    Description: Select the Subnet
-    Type: List<AWS::EC2::Subnet::Id>
+
   LatestECSOptimizedAMI:
-    Description: AMI ID
+    Description: AMI ID for the EC2 instance running Redis.
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id
+
   SSHKey:
-    Description: Name of the key pair to ssh into the EC2 instance
+    Description: Name of the key pair to ssh into the EC2 instances.
     Type: AWS::EC2::KeyPair::KeyName
-  EBSecurityGroup:
-    Description: Select the Custom Security Group that wraps the Elastic Beanstalk EC2 instances
-    Type: AWS::EC2::SecurityGroup::Id
+
+  EBInstanceType:
+    Description: EC2 instance type for the Elastic Beanstalk environment. Check for the Free Tier options available in your region (t2.micro or t3.micro).
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t2.nano
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+      - t2.xlarge
+      - t2.2xlarge
+      - t3.nano
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - t3.2xlarge
+      # - t4g.nano
+      # - t4g.micro
+      # - t4g.small
+      # - t4g.medium
+      # - t4g.large
+      # - t4g.xlarge
+      # - t4g.2xlarge
+
+  EBMinSize:
+    Description: Minimum number of EC2 instances for the Flask API.
+    Type: Number
+    Default: 1
+    # EBMinSize should be higher than 0
+    MinValue: 1
+    ConstraintDescription: EBMinSize must be at least 1.
+
+  EBMaxSize:
+    Description: Maximum number of EC2 instances for the Flask API.
+    Type: Number
+    Default: 2
+    # EBMaxSize should be greater than or equal to EBMinSize
+    MinValue: 1
+    ConstraintDescription: EBMaxSize must be greater than or equal to EBMinSize.
 
 Mappings:
   InstanceTypeMemoryReservation:
@@ -47,6 +83,104 @@ Mappings:
       MemoryReservation: 31000 # total 32768 MiB, 31685 MiB actually available to ECS container
 
 Resources:
+  ### VPC and Subnets Definition ###
+  PublicVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.31.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName"]]
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PublicVPC
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: ""
+      CidrBlock: 172.31.0.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName", Public]]
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: ""
+      VpcId: !Ref PublicVPC
+      CidrBlock: 172.31.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName", Public]]
+
+  PublicSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 2
+          - Fn::GetAZs: ""
+      VpcId: !Ref PublicVPC
+      CidrBlock: 172.31.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName", Public]]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName"]]
+
+  GatewayToInternet:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref PublicVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref PublicVPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayToInternet
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet3
+      RouteTableId: !Ref PublicRouteTable
+
+  ### Shared Resources Definition ###
   SharedRedisPrivateHostedZone:
     Type: AWS::Route53::HostedZone
     Properties:
@@ -54,7 +188,7 @@ Resources:
       HostedZoneConfig:
         Comment: "Private hosted zone to route traffic to Redis cluster instance"
       VPCs:
-        - VPCId: !Ref VPCId
+        - VPCId: !Ref PublicVPC
           VPCRegion: !Ref AWS::Region
 
   SharedRedisInstanceDnsRecord:
@@ -211,6 +345,31 @@ Resources:
     Properties:
       ServiceToken: !GetAtt SharedDNSRecordLambdaDelete.Arn
 
+  ### Security Groups Definition ###
+  EBSecurityGroup: # EB Security Group added in addition to the default EB SG to enable ssh
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for all ElasticBeanstalk Environments
+      GroupName: !Sub ${AWS::StackName}-AWSEBCustomSecurityGroup
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref PublicVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-env
+
+  EBSecurityGroupIngress: # to create an inbound rule from ECS to EB on port 6379 without creating a circular dependency
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EBSecurityGroup
+      FromPort: 6379
+      ToPort: 6379
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref ECSSecurityGroup
+
   ECSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -225,11 +384,12 @@ Resources:
           ToPort: 6379
           IpProtocol: tcp
           SourceSecurityGroupId: !Ref EBSecurityGroup
-      VpcId: !Ref VPCId
+      VpcId: !Ref PublicVPC
       Tags:
         - Key: Name
           Value: !Join [_, [!Ref "AWS::StackName"]]
 
+  ### ECS Resources Definition ###
   ECSInstanceProfileRole:
     Type: AWS::IAM::Role
     Properties:
@@ -292,7 +452,7 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     DependsOn:
       - ECSCluster
-      # - GatewayToInternet
+      - GatewayToInternet
     Properties:
       MinSize: "1"
       MaxSize: "1"
@@ -300,7 +460,10 @@ Resources:
       LaunchTemplate:
         LaunchTemplateId: !Ref ECSLaunchTemplate
         Version: !GetAtt ECSLaunchTemplate.LatestVersionNumber
-      VPCZoneIdentifier: !Ref SubnetIds
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1
+        - !Ref PublicSubnet2
+        - !Ref PublicSubnet3
       Tags:
         - Key: Name
           PropagateAtLaunch: true
@@ -444,10 +607,149 @@ Resources:
       Tags: []
       TaskDefinition: !Ref ECSTaskDefinition
 
+  ### Elastic Beanstalk Environment Definition ###
+  EBApplication:
+    Type: AWS::ElasticBeanstalk::Application
+    Properties:
+      ApplicationName: !Sub ${AWS::StackName}-app
+
+  # pull app code from ECR Docker image
+  EBApplicationVersion:
+    Type: AWS::ElasticBeanstalk::ApplicationVersion
+    Properties:
+      ApplicationName: !Ref EBApplication
+      Description: Pulling Docker image from ECR
+      SourceBundle:
+        S3Bucket: eb-cloudformation-docker-compose
+        S3Key: basic-flask-test/docker-compose.yml
+
+  EBInstanceProfileRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  EBInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EBInstanceProfileRole
+
+  EBConfigurationTemplate:
+    Type: AWS::ElasticBeanstalk::ConfigurationTemplate
+    Properties:
+      ApplicationName: !Ref EBApplication
+      OptionSettings:
+        - Namespace: aws:autoscaling:asg
+          OptionName: MinSize
+          Value: !Ref EBMinSize
+        - Namespace: aws:autoscaling:asg
+          OptionName: MaxSize
+          Value: !Ref EBMaxSize
+
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: IamInstanceProfile
+          Value: !Ref EBInstanceProfile
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: EC2KeyName
+          Value: analytics-nopass
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: SecurityGroups
+          Value: !Ref EBSecurityGroup
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: EC2KeyName
+          Value: !Ref SSHKey
+
+        # - Namespace: aws:autoscaling:scheduledaction
+        #   OptionName: ...
+        #   Value: ...
+        # - Namespace: aws:autoscaling:trigger
+        #   OptionName: ...
+        #   Value: ...
+        # - Namespace: aws:autoscaling:updatepolicy:rollingupdate
+        #   OptionName: ...
+        #   Value: ...
+
+        - Namespace: aws:ec2:instances
+          OptionName: InstanceTypes
+          Value: !Join [",", [!Ref EBInstanceType]]
+
+        - Namespace: aws:ec2:vpc
+          OptionName: VPCId
+          Value: !Ref PublicVPC
+        - Namespace: aws:ec2:vpc
+          OptionName: Subnets
+          Value:
+            !Join [
+              ",",
+              [!Ref PublicSubnet1, !Ref PublicSubnet2, !Ref PublicSubnet3],
+            ]
+        - Namespace: aws:ec2:vpc
+          OptionName: ELBSubnets
+          Value:
+            !Join [
+              ",",
+              [!Ref PublicSubnet1, !Ref PublicSubnet2, !Ref PublicSubnet3],
+            ]
+        - Namespace: aws:ec2:vpc
+          OptionName: ELBScheme
+          Value: public
+        - Namespace: aws:ec2:vpc
+          OptionName: AssociatePublicIpAddress
+          Value: true
+
+        - Namespace: aws:elasticbeanstalk:application
+          OptionName: Application Healthcheck URL
+          Value: /
+
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: EnvironmentType
+          Value: LoadBalanced
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: LoadBalancerType
+          Value: application
+
+        # DB initialization
+        # - Namespace: aws:rds:dbinstance
+        #   OptionName: DBAllocatedStorage
+        #   Value: 25
+        # - Namespace: aws:rds:dbinstance
+        #   OptionName: DBEngine
+        #   Value: postgres
+        # - Namespace: aws:rds:dbinstance
+        #   OptionName: DBInstanceClass
+        #   Value: !Ref DBInstanceType
+        # - Namespace: aws:rds:dbinstance
+        #   OptionName: DBUser
+        #   Value: ebuser
+        # - Namespace: aws:rds:dbinstance
+        #   OptionName: DBPassword
+        #   Value: ...
+
+      # using the Docker platform
+      SolutionStackName: 64bit Amazon Linux 2023 v4.3.0 running Docker
+
+  EBEnvironment:
+    Type: AWS::ElasticBeanstalk::Environment
+    DependsOn: !Ref ECSService
+    Properties:
+      ApplicationName: !Ref EBApplication
+      EnvironmentName: !Sub ${AWS::StackName}-env
+      TemplateName: !Ref EBConfigurationTemplate
+      VersionLabel: !Ref EBApplicationVersion
+
 Outputs:
+  LoadBalancerURL:
+    Description: URL to reach the load balancer and the API
+    Value: !Join ["", ["http://", !GetAtt EBEnvironment.EndpointURL]]
   SharedRedisInstanceDnsRecord:
     Description: DNS name for Redis instance
     Value: !Ref SharedRedisInstanceDnsRecord
-# ECSCluster:
-#   Description: The created cluster
-#   Value: !Ref ECSCluster

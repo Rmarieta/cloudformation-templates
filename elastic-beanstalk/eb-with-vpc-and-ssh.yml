@@ -26,21 +26,21 @@ Parameters:
       # - t4g.xlarge
       # - t4g.2xlarge
 
-  MinSize:
+  EBMinSize:
     Description: Minimum number of EC2 instances for the Flask API
     Type: Number
     Default: 1
-    # MinSize should be higher than 0
+    # EBMinSize should be higher than 0
     MinValue: 1
-    ConstraintDescription: MinSize must be at least 1
+    ConstraintDescription: EBMinSize must be at least 1
 
-  MaxSize:
+  EBMaxSize:
     Description: Maximum number of EC2 instances for the Flask API
     Type: Number
     Default: 2
-    # MaxSize should be higher or equal to MinSize
+    # EBMaxSize should be greater than or equal to EBMinSize
     MinValue: 1
-    ConstraintDescription: MaxSize must be greater than or equal to MinSize
+    ConstraintDescription: EBMaxSize must be greater than or equal to EBMinSize
 
   SSHKey:
     Description: Name of the key pair to ssh into the EC2 instance
@@ -191,10 +191,10 @@ Resources:
       OptionSettings:
         - Namespace: aws:autoscaling:asg
           OptionName: MinSize
-          Value: !Ref MinSize
+          Value: !Ref EBMinSize
         - Namespace: aws:autoscaling:asg
           OptionName: MaxSize
-          Value: !Ref MaxSize
+          Value: !Ref EBMaxSize
 
         - Namespace: aws:autoscaling:launchconfiguration
           OptionName: IamInstanceProfile

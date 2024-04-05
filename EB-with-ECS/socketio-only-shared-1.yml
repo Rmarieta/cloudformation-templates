@@ -11,22 +11,58 @@ Parameters:
       - t4g.large
       - t4g.xlarge
       - t4g.2xlarge
-  VPCId:
-    Description: Select the VPC for your resources
-    Type: AWS::EC2::VPC::Id
-  SubnetIds:
-    Description: Select the Subnet
-    Type: List<AWS::EC2::Subnet::Id>
+
   LatestECSOptimizedAMI:
-    Description: AMI ID
+    Description: AMI ID for the EC2 instance running Redis.
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id
+
   SSHKey:
-    Description: Name of the key pair to ssh into the EC2 instance
+    Description: Name of the key pair to ssh into the EC2 instances.
     Type: AWS::EC2::KeyPair::KeyName
-  EBSecurityGroup:
-    Description: Select the Custom Security Group that wraps the Elastic Beanstalk EC2 instances
-    Type: AWS::EC2::SecurityGroup::Id
+
+  EBInstanceType:
+    Description: EC2 instance type for the Elastic Beanstalk environment. Check for the Free Tier options available in your region (t2.micro or t3.micro).
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t2.nano
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+      - t2.xlarge
+      - t2.2xlarge
+      - t3.nano
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+      - t3.2xlarge
+      # - t4g.nano
+      # - t4g.micro
+      # - t4g.small
+      # - t4g.medium
+      # - t4g.large
+      # - t4g.xlarge
+      # - t4g.2xlarge
+
+  EBMinSize:
+    Description: Minimum number of EC2 instances for the Flask API.
+    Type: Number
+    Default: 1
+    # EBMinSize should be higher than 0
+    MinValue: 1
+    ConstraintDescription: EBMinSize must be at least 1.
+
+  EBMaxSize:
+    Description: Maximum number of EC2 instances for the Flask API.
+    Type: Number
+    Default: 2
+    # EBMaxSize should be greater than or equal to EBMinSize
+    MinValue: 1
+    ConstraintDescription: EBMaxSize must be greater than or equal to EBMinSize.
 
 Mappings:
   InstanceTypeMemoryReservation:
@@ -47,6 +83,104 @@ Mappings:
       MemoryReservation: 31000 # total 32768 MiB, 31685 MiB actually available to ECS container
 
 Resources:
+  # VPC and Subnets definition
+  PublicVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.31.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName"]]
+
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref PublicVPC
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: ""
+      CidrBlock: 172.31.0.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName", Public]]
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: ""
+      VpcId: !Ref PublicVPC
+      CidrBlock: 172.31.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName", Public]]
+
+  PublicSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 2
+          - Fn::GetAZs: ""
+      VpcId: !Ref PublicVPC
+      CidrBlock: 172.31.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName", Public]]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName"]]
+
+  GatewayToInternet:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref PublicVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref PublicVPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayToInternet
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet3RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet3
+      RouteTableId: !Ref PublicRouteTable
+
+  # Shared resources definition
   SharedRedisPrivateHostedZone:
     Type: AWS::Route53::HostedZone
     Properties:
@@ -54,7 +188,7 @@ Resources:
       HostedZoneConfig:
         Comment: "Private hosted zone to route traffic to Redis cluster instance"
       VPCs:
-        - VPCId: !Ref VPCId
+        - VPCId: !Ref PublicVPC
           VPCRegion: !Ref AWS::Region
 
   SharedRedisInstanceDnsRecord:
@@ -211,6 +345,32 @@ Resources:
     Properties:
       ServiceToken: !GetAtt SharedDNSRecordLambdaDelete.Arn
 
+  # Security Group definitions
+  EBSecurityGroup: # EB Security Group added in addition to the default EB SG to enable ssh
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for all ElasticBeanstalk Environments
+      GroupName: !Sub ${AWS::StackName}-AWSEBCustomSecurityGroup
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref PublicVPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-env
+
+  # to create an inbound rule from ECS to EB on port 6379 without creating a circular dependency
+  EBSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref EBSecurityGroup
+      FromPort: 6379
+      ToPort: 6379
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref ECSSecurityGroup
+
   ECSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -225,229 +385,15 @@ Resources:
           ToPort: 6379
           IpProtocol: tcp
           SourceSecurityGroupId: !Ref EBSecurityGroup
-      VpcId: !Ref VPCId
+      VpcId: !Ref PublicVPC
       Tags:
         - Key: Name
           Value: !Join [_, [!Ref "AWS::StackName"]]
 
-  ECSInstanceProfileRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: ECSLambdaInvokePolicy
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action:
-                  - lambda:InvokeFunction
-                Resource: !GetAtt SharedDNSRecordLambdaUpdate.Arn
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-
-  ECSInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      Roles:
-        - !Ref ECSInstanceProfileRole
-
-  ECSLaunchTemplate:
-    Type: AWS::EC2::LaunchTemplate
-    DependsOn: ECSCluster
-    Properties:
-      LaunchTemplateData:
-        ImageId: !Ref LatestECSOptimizedAMI
-        SecurityGroupIds:
-          - !GetAtt ECSSecurityGroup.GroupId
-        InstanceType: !Ref RedisInstanceType
-        KeyName: !Ref SSHKey
-        IamInstanceProfile:
-          Arn: !GetAtt ECSInstanceProfile.Arn
-        UserData: !Base64
-          "Fn::Sub":
-            - |-
-              #!/bin/bash
-              echo ECS_CLUSTER=${ClusterName} >> /etc/ecs/ecs.config;
-
-              # retrieve the private IPv4 address of the instance using ec2-metadata available on Amazon Linux AMI
-              INSTANCE_PRIVATE_IP_ADDRESS=$(ec2-metadata -o --quiet)
-
-              # format the payload string with proper quoting
-              PAYLOAD="{\"IpAddress\": \"$INSTANCE_PRIVATE_IP_ADDRESS\"}"
-
-              # call Lambda function to change the DNS record with private IPv4 address of the new instance
-              aws lambda invoke --function-name ${SharedDNSRecordLambdaUpdateArn} --payload "$PAYLOAD" --cli-binary-format raw-in-base64-out /tmp/lambda-update-dns-output.json
-            - ClusterName: !Sub ${AWS::StackName}-ECSCluster
-              SharedDNSRecordLambdaUpdateArn: !GetAtt SharedDNSRecordLambdaUpdate.Arn
-
-  ECSAutoScalingGroup:
-    Type: AWS::AutoScaling::AutoScalingGroup
-    DependsOn:
-      - ECSCluster
-      # - GatewayToInternet
-    Properties:
-      MinSize: "1"
-      MaxSize: "1"
-      DesiredCapacity: "1"
-      LaunchTemplate:
-        LaunchTemplateId: !Ref ECSLaunchTemplate
-        Version: !GetAtt ECSLaunchTemplate.LatestVersionNumber
-      VPCZoneIdentifier: !Ref SubnetIds
-      Tags:
-        - Key: Name
-          PropagateAtLaunch: true
-          Value: !Join
-            - " - "
-            - - ECS Instance
-              - !Sub ${AWS::StackName}-ECSCluster
-
-  ECSCluster:
-    Type: AWS::ECS::Cluster
-    Properties:
-      ClusterName: !Sub ${AWS::StackName}-ECSCluster
-      ClusterSettings:
-        - Name: containerInsights
-          Value: disabled
-      Configuration:
-        ExecuteCommandConfiguration:
-          Logging: DEFAULT
-      ServiceConnectDefaults:
-        Namespace: !Sub ${AWS::StackName}-ECSCluster
-      Tags: []
-
-  ECSCapacityProvider:
-    Type: AWS::ECS::CapacityProvider
-    Properties:
-      AutoScalingGroupProvider:
-        AutoScalingGroupArn: !Ref ECSAutoScalingGroup
-        ManagedScaling:
-          Status: ENABLED
-          TargetCapacity: 100
-        ManagedTerminationProtection: DISABLED
-
-  ECSClusterCPAssociation:
-    Type: AWS::ECS::ClusterCapacityProviderAssociations
-    DependsOn: ECSCluster
-    Properties:
-      Cluster: !Sub ${AWS::StackName}-ECSCluster
-      CapacityProviders:
-        - !Ref ECSCapacityProvider
-      DefaultCapacityProviderStrategy:
-        - Base: 0
-          Weight: 1
-          CapacityProvider: !Ref ECSCapacityProvider
-
-  ECSTaskExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-
-  ECSCloudWatchLogsGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub ${AWS::StackName}-ECSRedisTaskGroup
-
-  ECSTaskDefinition:
-    Type: AWS::ECS::TaskDefinition
-    Properties:
-      Family: !Sub ${AWS::StackName}-ECSRedisTask
-      ContainerDefinitions:
-        - Name: redis
-          Image: redis:7.2.3
-          Cpu: 0
-          MemoryReservation: !FindInMap [
-              InstanceTypeMemoryReservation,
-              !Ref RedisInstanceType,
-              MemoryReservation,
-            ] # dynamic memory reservation mapped from RedisInstanceType
-          PortMappings:
-            - Name: redis-80-tcp
-              ContainerPort: 80
-              HostPort: 0
-              Protocol: tcp
-              AppProtocol: http
-            - Name: redis-6379-tcp
-              ContainerPort: 6379
-              HostPort: 6379
-              Protocol: tcp
-          Essential: true
-          Environment: []
-          EnvironmentFiles: []
-          MountPoints: []
-          VolumesFrom: []
-          Ulimits: []
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-create-group: true
-              awslogs-group: !Ref ECSCloudWatchLogsGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: ecs
-            SecretOptions: []
-          HealthCheck:
-            Command:
-              - "CMD-SHELL"
-              - "redis-cli --raw incr ping"
-            Interval: 5
-            Timeout: 5
-            Retries: 3
-            StartPeriod: 15
-      ExecutionRoleArn: !GetAtt ECSTaskExecutionRole.Arn
-      RequiresCompatibilities:
-        - EC2
-      RuntimePlatform:
-        CpuArchitecture: ARM64
-        OperatingSystemFamily: LINUX
-
-  ECSService:
-    Type: AWS::ECS::Service
-    # wait for the EC2 instances to be provisioned to avoid health failures at the start
-    DependsOn: ECSAutoScalingGroup
-    Properties:
-      Cluster: !Ref ECSCluster
-      DeploymentConfiguration:
-        MaximumPercent: 100
-        MinimumHealthyPercent: 0
-        DeploymentCircuitBreaker:
-          Enable: true
-          Rollback: true
-      DeploymentController:
-        Type: ECS
-      DesiredCount: 1
-      EnableECSManagedTags: true
-      PlacementConstraints: []
-      PlacementStrategies:
-        - Field: attribute:ecs.availability-zone
-          Type: spread
-        - Field: instanceId
-          Type: spread
-      SchedulingStrategy: REPLICA
-      ServiceName: !Sub ${AWS::StackName}-ECSService
-      ServiceConnectConfiguration:
-        Enabled: false
-      Tags: []
-      TaskDefinition: !Ref ECSTaskDefinition
-
 Outputs:
+  # LoadBalancerURL:
+  #   Description: URL to reach the load balancer and the API
+  #   Value: !Join ["", ["http://", !GetAtt EBEnvironment.EndpointURL]]
   SharedRedisInstanceDnsRecord:
     Description: DNS name for Redis instance
     Value: !Ref SharedRedisInstanceDnsRecord
-# ECSCluster:
-#   Description: The created cluster
-#   Value: !Ref ECSCluster
