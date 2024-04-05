@@ -1,5 +1,5 @@
 Parameters:
-  RedisInstanceType:
+  InstanceType:
     Description: EC2 instance type for the Redis cluster.
     Type: String
     Default: t4g.nano
@@ -47,169 +47,169 @@ Mappings:
       MemoryReservation: 31000 # total 32768 MiB, 31685 MiB actually available to ECS container
 
 Resources:
-  SharedRedisPrivateHostedZone:
-    Type: AWS::Route53::HostedZone
-    Properties:
-      Name: !Sub ${AWS::StackName}-redis-dns.internal
-      HostedZoneConfig:
-        Comment: "Private hosted zone to route traffic to Redis cluster instance"
-      VPCs:
-        - VPCId: !Ref VPCId
-          VPCRegion: !Ref AWS::Region
+  # SharedRedisPrivateHostedZone:
+  #   Type: AWS::Route53::HostedZone
+  #   Properties:
+  #     Name: !Sub ${AWS::StackName}-redis-dns.internal
+  #     HostedZoneConfig:
+  #       Comment: "Private hosted zone to route traffic to Redis cluster instance"
+  #     VPCs:
+  #       - VPCId: !Ref VPCId
+  #         VPCRegion: !Ref AWS::Region
 
-  SharedRedisInstanceDnsRecord:
-    Type: AWS::Route53::RecordSet
-    Properties:
-      HostedZoneId: !Ref SharedRedisPrivateHostedZone
-      Name: !Sub "api.${AWS::StackName}-redis-dns.internal"
-      Type: A
-      TTL: "20"
-      ResourceRecords:
-        - 172.31.255.0 # provide an IP that's part of the VPC but unused (not part of any subnets)
+  # SharedRedisInstanceDnsRecord:
+  #   Type: AWS::Route53::RecordSet
+  #   Properties:
+  #     HostedZoneId: !Ref SharedRedisPrivateHostedZone
+  #     Name: !Sub "api.${AWS::StackName}-redis-dns.internal"
+  #     Type: A
+  #     TTL: "20"
+  #     ResourceRecords:
+  #       - 172.31.255.0 # provide an IP that's part of the VPC but unused (not part of any subnets)
 
-  SharedDNSRecordLambdaExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: 2012-10-17
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: LambdaRoute53UpdatePolicy
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action:
-                  - route53:ChangeResourceRecordSets
-                  - route53:ListResourceRecordSets
-                Resource: !Sub "arn:aws:route53:::hostedzone/${SharedRedisPrivateHostedZone}"
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+  # SharedDNSRecordLambdaExecutionRole:
+  #   Type: AWS::IAM::Role
+  #   Properties:
+  #     AssumeRolePolicyDocument:
+  #       Version: 2012-10-17
+  #       Statement:
+  #         - Effect: Allow
+  #           Principal:
+  #             Service: lambda.amazonaws.com
+  #           Action: sts:AssumeRole
+  #     Policies:
+  #       - PolicyName: LambdaRoute53UpdatePolicy
+  #         PolicyDocument:
+  #           Version: 2012-10-17
+  #           Statement:
+  #             - Effect: Allow
+  #               Action:
+  #                 - route53:ChangeResourceRecordSets
+  #                 - route53:ListResourceRecordSets
+  #               Resource: !Sub "arn:aws:route53:::hostedzone/${SharedRedisPrivateHostedZone}"
+  #     ManagedPolicyArns:
+  #       - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
-  SharedDNSRecordLambdaUpdate:
-    Type: AWS::Lambda::Function
-    Properties:
-      Handler: index.lambda_handler
-      Role: !GetAtt SharedDNSRecordLambdaExecutionRole.Arn
-      Environment:
-        Variables:
-          HOSTED_ZONE_ID: !Ref SharedRedisPrivateHostedZone
-          DNS_RECORD_NAME: !Ref SharedRedisInstanceDnsRecord
-      Runtime: python3.11
-      Code:
-        ZipFile: |
-          import boto3
-          import os
-          import json
+  # SharedDNSRecordLambdaUpdate:
+  #   Type: AWS::Lambda::Function
+  #   Properties:
+  #     Handler: index.lambda_handler
+  #     Role: !GetAtt SharedDNSRecordLambdaExecutionRole.Arn
+  #     Environment:
+  #       Variables:
+  #         HOSTED_ZONE_ID: !Ref SharedRedisPrivateHostedZone
+  #         DNS_RECORD_NAME: !Ref SharedRedisInstanceDnsRecord
+  #     Runtime: python3.11
+  #     Code:
+  #       ZipFile: |
+  #         import boto3
+  #         import os
+  #         import json
 
-          def lambda_handler(event, context):
-              client = boto3.client('route53')
+  #         def lambda_handler(event, context):
+  #             client = boto3.client('route53')
 
-              response = client.change_resource_record_sets(
-                  HostedZoneId=os.environ.get('HOSTED_ZONE_ID'),
-                  ChangeBatch={
-                      'Changes': [
-                          {
-                              'Action': 'UPSERT',
-                              'ResourceRecordSet': {
-                                  'Name': os.environ.get('DNS_RECORD_NAME'),
-                                  'Type': 'A',
-                                  'TTL': 20,
-                                  'ResourceRecords': [
-                                      {
-                                          'Value': event['IpAddress']
-                                      }
-                                  ]
-                              }
-                          }
-                      ]
-                  }
-              )
-              
-              response['ChangeInfo']['SubmittedAt'] = response['ChangeInfo']['SubmittedAt'].isoformat()
+  #             response = client.change_resource_record_sets(
+  #                 HostedZoneId=os.environ.get('HOSTED_ZONE_ID'),
+  #                 ChangeBatch={
+  #                     'Changes': [
+  #                         {
+  #                             'Action': 'UPSERT',
+  #                             'ResourceRecordSet': {
+  #                                 'Name': os.environ.get('DNS_RECORD_NAME'),
+  #                                 'Type': 'A',
+  #                                 'TTL': 20,
+  #                                 'ResourceRecords': [
+  #                                     {
+  #                                         'Value': event['IpAddress']
+  #                                     }
+  #                                 ]
+  #                             }
+  #                         }
+  #                     ]
+  #                 }
+  #             )
 
-              return json.dumps(response)
+  #             response['ChangeInfo']['SubmittedAt'] = response['ChangeInfo']['SubmittedAt'].isoformat()
 
-  SharedDNSRecordLambdaDelete: # delete the record created with Lambda in the private hosted zone upon stack DELETE
-    Type: AWS::Lambda::Function
-    Properties:
-      Handler: index.lambda_handler
-      Role: !GetAtt SharedDNSRecordLambdaExecutionRole.Arn
-      Environment:
-        Variables:
-          HOSTED_ZONE_ID: !Ref SharedRedisPrivateHostedZone
-          DNS_RECORD_NAME: !Ref SharedRedisInstanceDnsRecord
-      Runtime: python3.11
-      Code:
-        ZipFile: |
-          import boto3
-          import os
-          import json
-          import cfnresponse
+  #             return json.dumps(response)
 
-          def lambda_handler(event, context):
+  # SharedDNSRecordLambdaDelete: # delete the record created with Lambda in the private hosted zone upon stack DELETE
+  #   Type: AWS::Lambda::Function
+  #   Properties:
+  #     Handler: index.lambda_handler
+  #     Role: !GetAtt SharedDNSRecordLambdaExecutionRole.Arn
+  #     Environment:
+  #       Variables:
+  #         HOSTED_ZONE_ID: !Ref SharedRedisPrivateHostedZone
+  #         DNS_RECORD_NAME: !Ref SharedRedisInstanceDnsRecord
+  #     Runtime: python3.11
+  #     Code:
+  #       ZipFile: |
+  #         import boto3
+  #         import os
+  #         import json
+  #         import cfnresponse
 
-              response = { 'ChangeInfo': { 'Comment': 'Not a DELETE stack event' } }
-              if event['RequestType'] == 'Delete':
+  #         def lambda_handler(event, context):
 
-                  client = boto3.client('route53')
-                  dns_record_name = os.environ.get('DNS_RECORD_NAME')
+  #             response = { 'ChangeInfo': { 'Comment': 'Not a DELETE stack event' } }
+  #             if event['RequestType'] == 'Delete':
 
-                  # retrieve the current record value necessary for deletion
-                  response_record_sets = client.list_resource_record_sets(
-                      HostedZoneId=os.environ.get('HOSTED_ZONE_ID'),
-                      StartRecordName=dns_record_name,
-                      StartRecordType='A',
-                      MaxItems='1'
-                  )
+  #                 client = boto3.client('route53')
+  #                 dns_record_name = os.environ.get('DNS_RECORD_NAME')
 
-                  current_value = None
-                  if 'ResourceRecordSets' in response_record_sets:
+  #                 # retrieve the current record value necessary for deletion
+  #                 response_record_sets = client.list_resource_record_sets(
+  #                     HostedZoneId=os.environ.get('HOSTED_ZONE_ID'),
+  #                     StartRecordName=dns_record_name,
+  #                     StartRecordType='A',
+  #                     MaxItems='1'
+  #                 )
 
-                      record_set = response_record_sets['ResourceRecordSets'][0]
+  #                 current_value = None
+  #                 if 'ResourceRecordSets' in response_record_sets:
 
-                      # add '.' to dns_record_name for trailing '.' in RecordSet.Name
-                      if record_set['Name'] == f"{dns_record_name}." and record_set['Type'] == 'A':
-                          current_value = record_set['ResourceRecords'][0]['Value']
+  #                     record_set = response_record_sets['ResourceRecordSets'][0]
 
-                  # if a value has been found for the record
-                  if current_value: 
-                    response = client.change_resource_record_sets(
-                        HostedZoneId=os.environ.get('HOSTED_ZONE_ID'),
-                        ChangeBatch={
-                            'Changes': [
-                                {
-                                    'Action': 'DELETE',
-                                    'ResourceRecordSet': {
-                                        'Name': dns_record_name,
-                                        'Type': 'A',
-                                        'TTL': 20,
-                                        'ResourceRecords': [
-                                            {
-                                                'Value': current_value
-                                            }
-                                        ]
-                                    }
-                                }
-                            ]
-                        }
-                    )
-              
-                    response['ChangeInfo']['SubmittedAt'] = response['ChangeInfo']['SubmittedAt'].isoformat()
+  #                     # add '.' to dns_record_name for trailing '.' in RecordSet.Name
+  #                     if record_set['Name'] == f"{dns_record_name}." and record_set['Type'] == 'A':
+  #                         current_value = record_set['ResourceRecords'][0]['Value']
 
-              response['event'] = json.dumps(event)
+  #                 # if a value has been found for the record
+  #                 if current_value:
+  #                   response = client.change_resource_record_sets(
+  #                       HostedZoneId=os.environ.get('HOSTED_ZONE_ID'),
+  #                       ChangeBatch={
+  #                           'Changes': [
+  #                               {
+  #                                   'Action': 'DELETE',
+  #                                   'ResourceRecordSet': {
+  #                                       'Name': dns_record_name,
+  #                                       'Type': 'A',
+  #                                       'TTL': 20,
+  #                                       'ResourceRecords': [
+  #                                           {
+  #                                               'Value': current_value
+  #                                           }
+  #                                       ]
+  #                                   }
+  #                               }
+  #                           ]
+  #                       }
+  #                   )
 
-              cfnresponse.send(event, context, cfnresponse.SUCCESS, response)
-              return response
+  #                   response['ChangeInfo']['SubmittedAt'] = response['ChangeInfo']['SubmittedAt'].isoformat()
 
-  SharedOnStackDeletion: # call the Lambda to delete the record in the private hosted zone to avoid failure of stack deletion
-    Type: Custom::CleanUpPrivateZoneRecordLambda
-    Properties:
-      ServiceToken: !GetAtt SharedDNSRecordLambdaDelete.Arn
+  #             response['event'] = json.dumps(event)
+
+  #             cfnresponse.send(event, context, cfnresponse.SUCCESS, response)
+  #             return response
+
+  # SharedOnStackDeletion: # call the Lambda to delete the record in the private hosted zone to avoid failure of stack deletion
+  #   Type: Custom::CleanUpPrivateZoneRecordLambda
+  #   Properties:
+  #     ServiceToken: !GetAtt SharedDNSRecordLambdaDelete.Arn
 
   ECSInstanceProfileRole:
     Type: AWS::IAM::Role
@@ -221,15 +221,15 @@ Resources:
             Principal:
               Service: ec2.amazonaws.com
             Action: sts:AssumeRole
-      Policies:
-        - PolicyName: ECSLambdaInvokePolicy
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action:
-                  - lambda:InvokeFunction
-                Resource: !GetAtt SharedDNSRecordLambdaUpdate.Arn
+      # Policies:
+      #   - PolicyName: ECSLambdaInvokePolicy
+      #     PolicyDocument:
+      #       Version: 2012-10-17
+      #       Statement:
+      #         - Effect: Allow
+      #           Action:
+      #             - lambda:InvokeFunction
+      #           Resource: !GetAtt SharedDNSRecordLambdaUpdate.Arn
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
@@ -248,7 +248,7 @@ Resources:
         ImageId: !Ref LatestECSOptimizedAMI
         SecurityGroupIds:
           - !GetAtt ECSSecurityGroup.GroupId
-        InstanceType: !Ref RedisInstanceType
+        InstanceType: !Ref InstanceType
         KeyName: !Ref SSHKey
         IamInstanceProfile:
           Arn: !GetAtt ECSInstanceProfile.Arn
@@ -258,16 +258,8 @@ Resources:
               #!/bin/bash
               echo ECS_CLUSTER=${ClusterName} >> /etc/ecs/ecs.config;
 
-              # retrieve the private IPv4 address of the instance using ec2-metadata available on Amazon Linux AMI
-              INSTANCE_PRIVATE_IP_ADDRESS=$(ec2-metadata -o --quiet)
-
-              # format the payload string with proper quoting
-              PAYLOAD="{\"IpAddress\": \"$INSTANCE_PRIVATE_IP_ADDRESS\"}"
-
-              # call Lambda function to change the DNS record with private IPv4 address of the new instance
-              aws lambda invoke --function-name ${SharedDNSRecordLambdaUpdateArn} --payload "$PAYLOAD" --cli-binary-format raw-in-base64-out /tmp/lambda-update-dns-output.json
             - ClusterName: !Sub ${AWS::StackName}-ECSCluster
-              SharedDNSRecordLambdaUpdateArn: !GetAtt SharedDNSRecordLambdaUpdate.Arn
+              # SharedDNSRecordLambdaUpdateArn: !GetAtt SharedDNSRecordLambdaUpdate.Arn
 
   ECSAutoScalingGroup:
     Type: "AWS::AutoScaling::AutoScalingGroup"
@@ -331,16 +323,20 @@ Resources:
     Properties:
       GroupDescription: SG for ECS cluster
       GroupName: !Sub ${AWS::StackName}-ECSSecurityGroup
+      VpcId: !Ref VPCId
       SecurityGroupIngress:
         - FromPort: 22
           ToPort: 22
           IpProtocol: tcp
           CidrIp: 0.0.0.0/0
+        - FromPort: 22
+          ToPort: 22
+          IpProtocol: tcp
+          CidrIpv6: "::/0"
         - FromPort: 6379
           ToPort: 6379
           IpProtocol: tcp
           SourceSecurityGroupId: !Ref EBSecurityGroup
-      VpcId: !Ref VPCId
       Tags:
         - Key: Name
           Value: !Join [_, [!Ref "AWS::StackName"]]
@@ -373,9 +369,9 @@ Resources:
           Cpu: 0
           MemoryReservation: !FindInMap [
               InstanceTypeMemoryReservation,
-              !Ref RedisInstanceType,
+              !Ref InstanceType,
               MemoryReservation,
-            ] # dynamic memory reservation mapped from RedisInstanceType
+            ] # dynamic memory reservation mapped from InstanceType
           PortMappings:
             - Name: redis-80-tcp
               ContainerPort: 80
@@ -443,11 +439,10 @@ Resources:
         Enabled: false
       Tags: []
       TaskDefinition: !Ref ECSTaskDefinition
-
-Outputs:
-  SharedRedisInstanceDnsRecord:
-    Description: DNS name for Redis instance
-    Value: !Ref SharedRedisInstanceDnsRecord
+# Outputs:
+# SharedRedisInstanceDnsRecord:
+#   Description: DNS name for Redis instance
+#   Value: !Ref SharedRedisInstanceDnsRecord
 # ECSCluster:
 #   Description: The created cluster
 #   Value: !Ref ECSCluster
