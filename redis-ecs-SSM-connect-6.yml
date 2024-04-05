@@ -21,9 +21,9 @@ Parameters:
     Description: AMI ID
     Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
     Default: /aws/service/ecs/optimized-ami/amazon-linux-2023/arm64/recommended/image_id
-  # SSHKey:
-  #   Description: Name of the key pair to ssh into the EC2 instance
-  #   Type: AWS::EC2::KeyPair::KeyName
+  SSHKey:
+    Description: Name of the key pair to ssh into the EC2 instance
+    Type: AWS::EC2::KeyPair::KeyName
   EBSecurityGroup:
     Description: Select the Custom Security Group that wraps the Elastic Beanstalk EC2 instances
     Type: AWS::EC2::SecurityGroup::Id
@@ -234,11 +234,9 @@ Resources:
         SecurityGroupIds:
           - !GetAtt ECSSecurityGroup.GroupId
         InstanceType: !Ref InstanceType
-        # KeyName: !Ref SSHKey
+        KeyName: !Ref SSHKey
         IamInstanceProfile:
           Arn: !GetAtt ECSInstanceProfile.Arn
-        NetworkInterfaces:
-          - AssociatePublicIpAddress: false
         UserData: !Base64
           "Fn::Sub":
             - |-
@@ -320,14 +318,14 @@ Resources:
       GroupName: !Sub ${AWS::StackName}-ECSSecurityGroup
       VpcId: !Ref VPCId
       SecurityGroupIngress:
-        # - FromPort: 22
-        #   ToPort: 22
-        #   IpProtocol: tcp
-        #   CidrIp: 0.0.0.0/0
-        # - FromPort: 22
-        #   ToPort: 22
-        #   IpProtocol: tcp
-        #   CidrIpv6: "::/0"
+        - FromPort: 22
+          ToPort: 22
+          IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+        - FromPort: 22
+          ToPort: 22
+          IpProtocol: tcp
+          CidrIpv6: "::/0"
         - FromPort: 6379
           ToPort: 6379
           IpProtocol: tcp
