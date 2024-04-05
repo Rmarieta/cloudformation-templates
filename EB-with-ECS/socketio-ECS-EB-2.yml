@@ -621,7 +621,8 @@ Resources:
       Description: Pulling Docker image from ECR
       SourceBundle:
         S3Bucket: eb-cloudformation-docker-compose
-        S3Key: basic-flask-test/docker-compose.yml
+        # S3Key: basic-flask-test/docker-compose.yml # for image with only Flask
+        S3Key: basic-flask-socketio-redis/docker-compose.yml # for image with Flask & socketio
 
   EBInstanceProfileRole:
     Type: AWS::IAM::Role
@@ -710,6 +711,15 @@ Resources:
           OptionName: Application Healthcheck URL
           Value: /
 
+        # Pass the Redis DNS name as environment variable
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: REDIS_MESSAGE_QUEUE_URL # name of the environment variable
+          Value: !Sub "redis://${SharedRedisInstanceDnsRecord}"
+
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: SECRET_KEY
+          Value: !Sub "dummy-key-passed-from-CFN-template"
+
         - Namespace: aws:elasticbeanstalk:environment
           OptionName: EnvironmentType
           Value: LoadBalanced
@@ -739,7 +749,7 @@ Resources:
 
   EBEnvironment:
     Type: AWS::ElasticBeanstalk::Environment
-    DependsOn: !Ref ECSService
+    DependsOn: ECSService
     Properties:
       ApplicationName: !Ref EBApplication
       EnvironmentName: !Sub ${AWS::StackName}-env
