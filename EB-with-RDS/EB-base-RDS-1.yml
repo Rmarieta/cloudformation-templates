@@ -1,0 +1,290 @@
+Parameters:
+  InstanceType:
+    Description: EC2 instance type for the Elastic Beanstalk environment. Check for the Free Tier options available in your region (t2.micro or t3.micro).
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.nano
+      - t3.micro
+
+  DBInstanceType:
+    Description: RDS instance type for the RDS database.
+    Type: String
+    Default: db.t4g.micro
+    AllowedValues:
+      - db.t4g.micro
+      - db.t4g.small
+      - db.t4g.medium
+      - db.t4g.large
+      - db.t4g.xlarge
+      - db.t4g.2xlarge
+
+Resources:
+  PublicVPC:
+    Type: "AWS::EC2::VPC"
+    Properties:
+      CidrBlock: 172.31.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName"]]
+  PublicSubnet1:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      VpcId: !Ref PublicVPC
+      AvailabilityZone:
+        Fn::Select:
+          - 0
+          - Fn::GetAZs: ""
+      CidrBlock: 172.31.0.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName", Public]]
+  PublicSubnet2:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: ""
+      VpcId: !Ref PublicVPC
+      CidrBlock: 172.31.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName", Public]]
+  PublicSubnet3:
+    Type: "AWS::EC2::Subnet"
+    Properties:
+      AvailabilityZone:
+        Fn::Select:
+          - 2
+          - Fn::GetAZs: ""
+      VpcId: !Ref PublicVPC
+      CidrBlock: 172.31.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName", Public]]
+  InternetGateway:
+    Type: "AWS::EC2::InternetGateway"
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [_, [!Ref "AWS::StackName"]]
+  GatewayToInternet:
+    Type: "AWS::EC2::VPCGatewayAttachment"
+    Properties:
+      VpcId: !Ref PublicVPC
+      InternetGatewayId: !Ref InternetGateway
+  PublicRouteTable:
+    Type: "AWS::EC2::RouteTable"
+    Properties:
+      VpcId: !Ref PublicVPC
+  PublicRoute:
+    Type: "AWS::EC2::Route"
+    DependsOn: GatewayToInternet
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  PublicSubnet1RouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnet2RouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnet3RouteTableAssociation:
+    Type: "AWS::EC2::SubnetRouteTableAssociation"
+    Properties:
+      SubnetId: !Ref PublicSubnet3
+      RouteTableId: !Ref PublicRouteTable
+
+  # EB Security Group added in addition to the default EB SG to enable ssh
+  EBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security Group for all ElasticBeanstalk Environments
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref PublicVPC
+
+  EBApplication:
+    Type: AWS::ElasticBeanstalk::Application
+    Properties:
+      ApplicationName: !Sub ${AWS::StackName}-app
+
+  # pull app code from ECR Docker image
+  EBApplicationVersion:
+    Type: AWS::ElasticBeanstalk::ApplicationVersion
+    Properties:
+      ApplicationName: !Ref EBApplication
+      Description: Pulling Docker image from ECR
+      SourceBundle:
+        S3Bucket: eb-cloudformation-docker-compose
+        S3Key: basic-flask-test-private/docker-compose.yml
+
+  EBInstanceProfileRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  EBInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref EBInstanceProfileRole
+
+  # RDSPasswordSecret:
+  #   Type: AWS::SecretsManager::Secret
+  #   Properties:
+  #     Description: Password for the RDS instance
+  #     Name: !Sub ${AWS::StackName}-RDSPassword
+  #     Tags:
+  #       - Key: Name
+  #         Value: !Join [_, [!Ref "AWS::StackName"]]
+
+  EBConfigurationTemplate:
+    Type: AWS::ElasticBeanstalk::ConfigurationTemplate
+    Properties:
+      ApplicationName: !Ref EBApplication
+      OptionSettings:
+        - Namespace: aws:autoscaling:asg
+          OptionName: MinSize
+          Value: 1
+        - Namespace: aws:autoscaling:asg
+          OptionName: MaxSize
+          Value: 1
+
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: IamInstanceProfile
+          Value: !Ref EBInstanceProfile
+        # - Namespace: aws:autoscaling:launchconfiguration
+        #   OptionName: EC2KeyName
+        #   Value: ...
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: SecurityGroups
+          Value: !Ref EBSecurityGroup
+
+        # - Namespace: aws:autoscaling:scheduledaction
+        #   OptionName: ...
+        #   Value: ...
+        # - Namespace: aws:autoscaling:trigger
+        #   OptionName: ...
+        #   Value: ...
+        # - Namespace: aws:autoscaling:updatepolicy:rollingupdate
+        #   OptionName: ...
+        #   Value: ...
+
+        - Namespace: aws:ec2:instances
+          OptionName: InstanceTypes
+          Value: !Join [",", [!Ref InstanceType]]
+
+        - Namespace: aws:ec2:vpc
+          OptionName: VPCId
+          Value: !Ref PublicVPC
+        - Namespace: aws:ec2:vpc
+          OptionName: Subnets
+          Value:
+            !Join [
+              ",",
+              [!Ref PublicSubnet1, !Ref PublicSubnet2, !Ref PublicSubnet3],
+            ]
+        - Namespace: aws:ec2:vpc
+          OptionName: ELBSubnets
+          Value:
+            !Join [
+              ",",
+              [!Ref PublicSubnet1, !Ref PublicSubnet2, !Ref PublicSubnet3],
+            ]
+        - Namespace: aws:ec2:vpc
+          OptionName: ELBScheme
+          Value: public
+        - Namespace: aws:ec2:vpc
+          OptionName: AssociatePublicIpAddress
+          Value: true
+
+        - Namespace: aws:elasticbeanstalk:application
+          OptionName: Application Healthcheck URL
+          Value: /
+
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: EnvironmentType
+          Value: LoadBalanced
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: LoadBalancerType
+          Value: application
+
+        # DB initialization
+        - Namespace: aws:rds:dbinstance
+          OptionName: DBAllocatedStorage
+          Value: 20
+        - Namespace: aws:rds:dbinstance
+          OptionName: DBEngine
+          Value: postgres
+        - Namespace: aws:rds:dbinstance
+          OptionName: DBInstanceClass
+          Value: !Ref DBInstanceType
+        - Namespace: aws:rds:dbinstance
+          OptionName: DBPassword
+          Value: ebrootpassword
+        - Namespace: aws:rds:dbinstance
+          OptionName: DBUser
+          Value: ebroot
+        # to create the DB with elastic beanstalk environment
+        - Namespace: aws:rds:dbinstance
+          OptionName: HasCoupledDatabase
+          Value: true
+
+      # using the Docker platform
+      SolutionStackName: 64bit Amazon Linux 2023 v4.3.0 running Docker
+
+  EBEnvironment:
+    Type: AWS::ElasticBeanstalk::Environment
+    Properties:
+      ApplicationName: !Ref EBApplication
+      EnvironmentName: !Sub ${AWS::StackName}-env
+      TemplateName: !Ref EBConfigurationTemplate
+      VersionLabel: !Ref EBApplicationVersion
+
+Outputs:
+  PublicVPCID:
+    Description: VPC ID
+    Value: !Ref "PublicVPC"
+    Export:
+      Name: BeanstalkPublicVPCID
+  PublicSubnet1ID:
+    Description: Public Subnet A ID
+    Value: !Ref "PublicSubnet1"
+    Export:
+      Name: BeanstalkPublicVPCSubnet1ID
+  PublicSubnet2ID:
+    Description: Public Subnet B ID
+    Value: !Ref "PublicSubnet2"
+    Export:
+      Name: BeanstalkPublicVPCSubnet2ID
+  PublicSubnet3ID:
+    Description: Public Subnet C ID
+    Value: !Ref "PublicSubnet3"
+    Export:
+      Name: BeanstalkPublicVPCSubnet3ID
+  LoadBalancerURL:
+    Description: URL to reach the load balancer and the API
+    Value: !Join ["", ["http://", !GetAtt EBEnvironment.EndpointURL]]

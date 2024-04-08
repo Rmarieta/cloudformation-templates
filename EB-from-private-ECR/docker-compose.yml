@@ -1,0 +1,11 @@
+services:
+  flask:
+    image: 097258850312.dkr.ecr.eu-north-1.amazonaws.com/unianalytics-flask-test:latest
+    ports:
+      - "80:5000"
+    environment:
+      - RDS_HOSTNAME=${RDS_HOSTNAME}
+      - RDS_PORT=${RDS_PORT}
+      - RDS_DB_NAME=${RDS_DB_NAME}
+      - RDS_USERNAME=${RDS_USERNAME}
+      - RDS_PASSWORD=${RDS_PASSWORD}
